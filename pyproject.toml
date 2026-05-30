@@ -1,0 +1,7 @@
+# pyproject.toml
+[build-system]
+requires = ["setuptools"]
+
+[project]
+name = "gibbssampling3d"
+version = "0.1.0"
