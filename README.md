@@ -8,15 +8,19 @@ A modular framework for **high-dimensional Gibbs sampling** applied to **linear 
 
 This repository implements a Gibbs sampling approach for large-scale Bayesian inference problems of the form:
 
+$$
 \[
 d = Hx + \epsilon, \quad \epsilon \sim \mathcal{N}(0, W^{-1})
 \]
+$$
 
 with a Gaussian prior:
 
+$$
 \[
 x \sim \mathcal{N}(\mu, C_x)
 \]
+$$
 
 The posterior is explored using a Gibbs-style sampler where each iteration requires solving a large sparse linear system using CG methods.
 
