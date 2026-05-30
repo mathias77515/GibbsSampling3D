@@ -48,23 +48,29 @@ This framework is designed for **scientific computing applications** such as:
 
 ### Likelihood
 
+$$
 \[
 d = Hx + \epsilon, \quad \epsilon \sim \mathcal{N}(0, W^{-1})
 \]
+$$
 
 ### Prior
 
+$$
 \[
 x \sim \mathcal{N}(\mu, C_x)
 \]
+$$
 
 ### Posterior Sampling Step
 
 Each Gibbs iteration solves:
 
+$$
 \[
 (H^T W H + C_x^{-1}) x = H^T W d + \eta
 \]
+$$
 
 where \(\eta\) represents stochastic Gaussian contributions ensuring correct posterior sampling.
 
@@ -76,13 +82,17 @@ At each iteration:
 
 1. Sample Gaussian noise vectors  
 2. Construct stochastic right-hand side:
+   $$
    \[
    b = H^T W d + \text{noise terms}
    \]
+   $$
 3. Solve linear system using CG:
+   $$
    \[
    (H^T W H + C_x^{-1}) x = b
    \]
+   $$
 4. Store the solution as a posterior sample
 
 ---
