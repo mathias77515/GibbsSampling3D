@@ -82,17 +82,13 @@ At each iteration:
 
 1. Sample Gaussian noise vectors  
 2. Construct stochastic right-hand side:
-   $$
-   \[
+   $\[
    b = H^T W d + \text{noise terms}
-   \]
-   $$
+   \]$
 3. Solve linear system using CG:
-   $$
-   \[
+   $\[
    (H^T W H + C_x^{-1}) x = b
-   \]
-   $$
+   \]$
 4. Store the solution as a posterior sample
 
 ---
