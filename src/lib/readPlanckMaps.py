@@ -1,5 +1,7 @@
 from pathlib import Path
 import healpy as hp
+from astropy.io import fits
+import numpy as np
 
 from ..data.getData import dataFolder
 
@@ -11,7 +13,47 @@ DEFAULT_PLANCK_FILENAME = Path(dataFolder) / "HFI_SkyMap_353_2048_R3.01_full.fit
 K_TO_MICRO_K = 1e6       # K_cmb → μK_cmb
 VAR_TO_MICRO_K_SQ = 1e12  # K² → μK²
 
+def read_variance_from_systematics(filename: Path | str, nside_target: int) -> tuple:
+    """Estimate per-pixel QQ, QU, UU variance maps from systematic noise realizations.
 
+    Loads an ensemble of noise realizations, downgradles them to the target
+    resolution, then estimates the Q/U covariance matrix across realizations.
+    The diagonal blocks of this covariance give per-pixel variance maps.
+
+    Args:
+        filename:     Path to the FITS file containing noise realizations
+                      in extension 1, shaped (n_reals, n_pix, 3) for (I, Q, U).
+        nside_target: Target HEALPix Nside resolution parameter.
+
+    Returns:
+        Tuple of (var_QQ, var_QU, var_UU) per-pixel variance maps in μK²,
+        each of shape (n_pix_target,).
+    """
+    n_pix_target = hp.nside2npix(nside_target)
+
+    # Load noise realizations from the first FITS extension
+    with fits.open(filename) as hdul:
+        noise_reals = hdul[1].data.copy()
+
+    n_reals = noise_reals.shape[0]
+
+    # Downgrade each realization to the target resolution (K → μK)
+    noise_down = np.zeros((n_reals, n_pix_target, 3))
+    for i in range(n_reals):
+        # Transpose: HEALPix expects (3, n_pix), data is stored as (n_pix, 3)
+        noise_down[i] = hp.ud_grade(noise_reals[i].T, nside_target).T * K_TO_MICRO_K
+
+    # Estimate the joint Q/U covariance across realizations
+    # cov_qu is (2 * n_pix_target, 2 * n_pix_target), laid out as [Q | U]
+    cov_qu = np.cov(noise_down[..., 1], noise_down[..., 2], rowvar=False)
+
+    # Extract diagonal blocks: per-pixel QQ, QU, UU variances
+    var_qq = np.diag(cov_qu[:n_pix_target, :n_pix_target])
+    var_qu = np.diag(cov_qu[n_pix_target:, :n_pix_target])
+    var_uu = np.diag(cov_qu[n_pix_target:, n_pix_target:])
+
+    return var_qq, var_qu, var_uu
+    
 class PlanckReader:
     """Reader for Planck HFI sky maps in FITS format.
 

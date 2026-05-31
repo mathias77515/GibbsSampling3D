@@ -5,6 +5,7 @@ import scipy
 import pickle
 import os
 import time
+import LocalBubble
 
 from src.lib import readPlanckMaps
 from src.lib import intensityTemplate
@@ -15,10 +16,10 @@ from src.utils import parser
 # -------------------------------------
 # PARAMETERS
 # -------------------------------------
-
+dataFolder = "/work/scratch/data/regniem/clouds"
 args       = parser.parse_args()
-FILENAME_FFP_SIMS = "/Users/mregnier/Desktop/toulouse/python/LocalBubble/LocalBubble/data/noise/nside64/100realizations_noise_ffp10_353_GHz.fits"
-FOLDERSAVE = ""
+FILENAME_FFP_SIMS = "/work/scratch/data/regniem/noise/nside64/100realizations_noise_ffp10_353_GHz.fits"
+FOLDERSAVE = "/work/scratch/data/regniem/clouds"
 chainID    = int(os.environ.get("SLURM_ARRAY_TASK_ID", 1))
 
 # -------------------------------------
@@ -38,26 +39,43 @@ print("=" * 60)
 # READ DATA
 # -------------------------------------
 
+maskGalPlane = LocalBubble.get_mask_galactic_plane(args.nside, field=3)#1)
+print(f"\nFsky : {maskGalPlane.sum()/maskGalPlane.size:.3f}\n")
 t0 = time.perf_counter()
 print("\n[1/4] Reading data...")
 
 # --- Read 3D data ---
 intensity = hp.read_map(str(dataFolder) + f"/Intensity_Nside{args.nside}.fits", field=None)
-labels = hp.read_map(str(dataFolder) + f"/Labels_Nside{args.nside}_alpha0.5000.fits", field=None)
+#labels = hp.read_map(str(dataFolder) + f"/Labels_Nside{args.nside}_alpha0.5000.fits", field=None)
+# Regularisation parameters used to produce each label map
+alphas = [0.01, 0.03, 0.05, 0.1, 0.5]
+labels = np.array([
+    hp.read_map(dataFolder + f"/Labels_Nside{args.nside}_alpha{alpha:.4f}.fits", field=None)
+    for alpha in alphas
+])
+
+# Merge multi-scale labels into a single consistent labelling
+labels = intensityTemplate.assembleLabelsClouds(labels)
 fwhm = 2*np.degrees(hp.nside2resol(args.nside))
 
 # --- Planck maps ---
-reader           = readPlanckMaps.PlanckReader()
+reader           = readPlanckMaps.PlanckReader(filename="/work/scratch/data/regniem/dust/HFI_SkyMap_353_2048_R3.01_full.fits")
 Iobs, Qobs, Uobs = reader.read_observed_maps(args.nside)
-Iobs             = hp.smoothing(Iobs, fwhm=np.radians(fwhm))
-Qobs             = hp.smoothing(Qobs, fwhm=np.radians(fwhm))
-Uobs             = hp.smoothing(Uobs, fwhm=np.radians(fwhm))
-
+Iobs             = hp.smoothing(Iobs, fwhm=np.radians(fwhm))#[maskGalPlane]
+Qobs             = hp.smoothing(Qobs, fwhm=np.radians(fwhm))#[maskGalPlane]
+Uobs             = hp.smoothing(Uobs, fwhm=np.radians(fwhm))#[maskGalPlane]
+qobs = Qobs / Iobs
+uobs = Uobs / Iobs
+Qobs = Qobs[maskGalPlane]
+Uobs = Uobs[maskGalPlane]
 # --- Planck variances ---
 varQQobs, varQUobs, varUUobs = readPlanckMaps.read_variance_from_systematics(
     FILENAME_FFP_SIMS,
     nside_target=args.nside
 )
+varQQobs = varQQobs[maskGalPlane]
+varQUobs = varQUobs[maskGalPlane]
+varUUobs = varUUobs[maskGalPlane]
 
 print(f"✓ Data loaded in {time.perf_counter() - t0:.2f} s")
 
@@ -70,12 +88,26 @@ print("\n[2/4] Building matrices...")
 
 Ibuilder = intensityTemplate.IntensityTemplateBuilder(
     labels=labels,
-    intensity=intensity
+    intensity=intensity,
+    mask=maskGalPlane,
 )
 
 H = Ibuilder.build(Iobs)
-H = scipy.sparse.csr_matrix(H)
 
+H = scipy.sparse.csr_matrix(H)
+uniqueLabels = np.unique(labels)[:-1]
+nclouds = len(uniqueLabels)
+
+Aq0 = np.zeros(nclouds)
+Au0 = np.zeros(nclouds)
+
+for k, icloud in enumerate(uniqueLabels):
+    mask = np.where(labels == icloud)[1]
+    Aq0[k] = qobs[mask].mean()
+    Au0[k] = uobs[mask].mean()
+Aq0 = Aq0[Ibuilder.valid_clouds]
+Au0 = Au0[Ibuilder.valid_clouds]
+muPrior = np.concatenate((Aq0, Au0))
 det = varQQobs * varUUobs - varQUobs**2
 
 wQQFull =  varUUobs / det
@@ -115,12 +147,36 @@ gibbs = GibbsSampler(
     w,
     d,
     wsqrt,
-    maxiterCG=10,
-    sigmaPrior=0.1
+    maxiterCG=20,
+    sigmaPrior=0.1,
+    muPrior=muPrior
 )
 
-results = gibbs.run(niter=500)
+niter = 2000
+results = gibbs.run(niter=niter)
+QSample = np.ones((niter, maskGalPlane.size)) * np.nan
+QSample[:, maskGalPlane] = results["QSample"]
+USample = np.ones((niter, maskGalPlane.size)) * np.nan
+USample[:, maskGalPlane] = results["USample"]
 
+results["QSample"] = QSample
+results["USample"] = USample
+
+stokesQobs = np.ones(maskGalPlane.size) * np.nan
+stokesUobs = np.ones(maskGalPlane.size) * np.nan
+stokesQvar = np.ones(maskGalPlane.size) * np.nan
+stokesUvar = np.ones(maskGalPlane.size) * np.nan
+
+stokesQobs[maskGalPlane] = Qobs
+stokesUobs[maskGalPlane] = Uobs
+stokesQvar[maskGalPlane] = varQQobs
+stokesUvar[maskGalPlane] = varUUobs
+
+results["stokesQobs"]   = stokesQobs
+results["stokesUobs"]   = stokesUobs
+results["stokesQvar"]   = stokesQvar
+results["stokesUvar"]   = stokesUvar
+results["maskGalPlane"] = maskGalPlane
 elapsed_sampling = time.perf_counter() - t0
 
 print(f"✓ Gibbs sampling completed in {elapsed_sampling:.2f} s")
@@ -133,7 +189,7 @@ print(f"  Average time per iteration: {elapsed_sampling / 500:.3f} s")
 t0 = time.perf_counter()
 print("\n[4/4] Saving results...")
 
-out_path = FOLDERSAVE + f"reconstructionGibbsNside{args.nside}_chain{chainID}.pkl"
+out_path = FOLDERSAVE + f"/reconstructionGibbsNside{args.nside}_chain{chainID}.pkl"
 
 with open(out_path, "wb") as fh:
     pickle.dump(results, fh, protocol=pickle.HIGHEST_PROTOCOL)

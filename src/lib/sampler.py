@@ -4,8 +4,9 @@ import time
 
 class GibbsSampler:
     
-    def __init__(self, H, w, d, wsqrt, maxiterCG):
+    def __init__(self, H, w, d, wsqrt, maxiterCG, sigmaPrior=0.1, muPrior=None):
         self.niterations = 1
+        
         
         self.H     = H
         self.w     = w
@@ -14,8 +15,22 @@ class GibbsSampler:
         self.TwiceNpix, self.TwiceNclouds = self.H.shape
         self.npix = int(self.TwiceNpix/2)
         self.nclouds = int(self.TwiceNclouds/2)
-        self.A = H.T @ w @ H
-        self.b = H.T @ w @ d
+
+        # muPrior: array of shape (2*nclouds,) or None
+        if muPrior is None:
+            self.muPrior = np.zeros(2*self.nclouds)
+        else:
+            self.muPrior = muPrior
+        
+        self.Cx = np.eye(2*self.nclouds) * sigmaPrior**2
+        self.invCxDiag = 1 / np.diag(self.Cx)
+
+        self.A = (H.T @ w @ H) + scipy.sparse.diags(self.invCxDiag)
+        print(f"H^T W H diag mean : {np.nanmean((H.T @ w @ H).diagonal()):.4e}")
+        print(f"invCx mean        : {np.nanmean(self.invCxDiag):.4e}")
+        print(f"ratio mean        : {np.nanmean((H.T @ w @ H).diagonal()/self.invCxDiag):.4e}")
+
+        self.b = H.T @ w @ d + self.invCxDiag * self.muPrior
         
         self.maxiterCG = maxiterCG
         self.nsteps = 10
@@ -24,14 +39,14 @@ class GibbsSampler:
         
         # --- Draw random vectors N(0, 1) ---
         omega      = np.random.normal(0, 1, size=2*self.npix)
-        #omegaPrior = np.random.normal(0, 1, size=2*self.nclouds)
+        omegaPrior = np.random.normal(0, 1, size=2*self.nclouds)
         
         # --- Draw for prior covariance ---
-        #prior = np.sqrt(invCxDiag) * omegaPrior
+        prior = np.sqrt(self.invCxDiag) * omegaPrior
         
         # --- Draw for data covariance ---
         rhs     = self.H.T @ (self.wsqrt @ omega)
-        brandom = self.b + rhs #+ prior
+        brandom = self.b + rhs + prior
         
         sol, _ = scipy.sparse.linalg.cg(self.A, brandom, x0=np.concatenate((self.AqSample[it-1], self.AuSample[it-1])), maxiter=self.maxiterCG)
         self.AqSample[it, ...] = sol[:self.nclouds]
@@ -41,7 +56,10 @@ class GibbsSampler:
         
         self.AqSample = np.zeros((niter, self.nclouds))
         self.AuSample = np.zeros((niter, self.nclouds))
-        
+        psi0 = np.random.uniform(-1, 1, size=self.nclouds)
+        self.AqSample[0] = 0.1 * np.cos(2 * psi0)
+        self.AuSample[0] = 0.1 * np.sin(2 * psi0)
+         
     def convergence(self, it, niter):
         
         # --- Periodic diagnostics ---
@@ -76,10 +94,12 @@ class GibbsSampler:
             
             # --- Convergence diagnosis ---
             self.convergence(it, niter)
-    
+
         QUSamples = np.array([self.H @ np.concatenate((self.AqSample[it], self.AuSample[it])) for it in range(niter)])
-        QSample   = QUSamples[:, :self.nclouds]
-        USample   = QUSamples[:, self.nclouds:]
+        
+        QSample   = QUSamples[:, :self.npix]
+        USample   = QUSamples[:, self.npix:]
+
         return {
             "AqSample":self.AqSample, 
             "AuSample":self.AuSample,

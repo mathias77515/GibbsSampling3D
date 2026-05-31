@@ -1,0 +1,10 @@
+README.md
+pyproject.toml
+src/data/__init__.py
+src/data/getData.py
+src/gibbssampling3d.egg-info/PKG-INFO
+src/gibbssampling3d.egg-info/SOURCES.txt
+src/gibbssampling3d.egg-info/dependency_links.txt
+src/gibbssampling3d.egg-info/top_level.txt
+src/lib/__init__.py
+src/lib/readPlanckMaps.py
